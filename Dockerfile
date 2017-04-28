@@ -10,4 +10,4 @@ ADD x.patch $BINUTILS_DIR
 RUN git apply x.patch
 RUN dnf install -y gcc texinfo bison flex gcc-c++
 RUN ./configure --target=bpf-elf
-RUN make
+RUN make -j`grep -Pc '^processor\t' /proc/cpuinfo`

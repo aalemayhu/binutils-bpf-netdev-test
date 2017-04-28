@@ -1,4 +1,4 @@
-project=scanf/binutils-bpf-netdev-test
+project=scanf/binutils-x
 
 all: docker_run
 

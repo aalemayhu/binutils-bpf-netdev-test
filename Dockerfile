@@ -8,6 +8,6 @@ RUN git clone --depth=1 git://sourceware.org/git/binutils-gdb.git $BINUTILS_DIR
 WORKDIR $BINUTILS_DIR
 ADD x.patch $BINUTILS_DIR
 RUN git apply x.patch
-RUN dnf install -y gcc texinfo bison flex
-RUN ./configure
+RUN dnf install -y gcc texinfo bison flex gcc-c++
+RUN ./configure --target=bpf-elf
 RUN make

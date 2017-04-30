@@ -1,13 +1,12 @@
 
-New in this version:
+This is mainly a synchronization point, I still need to look
+more deeply into Alexei's -g issue.
 
-1) All the relocation work I posted earlier today.
-2) Teach readelf about a few bpf relocs as needed
-3) Add a 'nop' instruction which facilitates the gas
-   testsuite.  I used "mov r0,r0"
-
-The whole gas testsuite passes now. :-)  But that just
-means we have to add more tests I guess....
+New in this version from v3:
+ - Remove tailcall from opcode table
+ - Rearrange relocations so that numbers match with LLVM ones
+ - Emit relocs properly so that dwarf2 debug info tests pass
+ - Handle negative load/store offsets properly, add tests
 
 Signed-off-by: David S. Miller <davem@davemloft.net>
 ---
@@ -19,16 +18,16 @@ Signed-off-by: David S. Miller <davem@davemloft.net>
  bfd/configure                   |   2 +
  bfd/configure.ac                |   2 +
  bfd/cpu-bpf.c                   |  41 +++
- bfd/elf64-bpf.c                 | 156 ++++++++++
+ bfd/elf64-bpf.c                 | 159 ++++++++++
  bfd/elf64-bpf.h                 |  24 ++
  bfd/libbfd.h                    |   4 +
  bfd/reloc.c                     |  11 +
  bfd/targets.c                   |   5 +
- binutils/readelf.c              |   5 +
+ binutils/readelf.c              |  11 +
  config.sub                      |   5 +-
  gas/Makefile.am                 |   2 +
  gas/Makefile.in                 |  17 ++
- gas/config/tc-bpf.c             | 628 ++++++++++++++++++++++++++++++++++++++++
+ gas/config/tc-bpf.c             | 639 ++++++++++++++++++++++++++++++++++++++++
  gas/config/tc-bpf.h             |  45 +++
  gas/configure.tgt               |   3 +
  gas/testsuite/gas/bpf/arith.d   |  61 ++++
@@ -36,19 +35,19 @@ Signed-off-by: David S. Miller <davem@davemloft.net>
  gas/testsuite/gas/bpf/atomics.d |  12 +
  gas/testsuite/gas/bpf/atomics.s |   4 +
  gas/testsuite/gas/bpf/bpf.exp   |  28 ++
- gas/testsuite/gas/bpf/call.d    |  18 ++
- gas/testsuite/gas/bpf/call.s    |  10 +
+ gas/testsuite/gas/bpf/call.d    |  14 +
+ gas/testsuite/gas/bpf/call.s    |   6 +
  gas/testsuite/gas/bpf/imm64.d   |  30 ++
  gas/testsuite/gas/bpf/imm64.s   |  12 +
  gas/testsuite/gas/bpf/jump.d    |  43 +++
  gas/testsuite/gas/bpf/jump.s    |  35 +++
- gas/testsuite/gas/bpf/loads.d   |  23 ++
- gas/testsuite/gas/bpf/loads.s   |  15 +
+ gas/testsuite/gas/bpf/loads.d   |  27 ++
+ gas/testsuite/gas/bpf/loads.s   |  19 ++
  gas/testsuite/gas/bpf/move.d    |  19 ++
  gas/testsuite/gas/bpf/move.s    |  11 +
- gas/testsuite/gas/bpf/stores.d  |  17 ++
- gas/testsuite/gas/bpf/stores.s  |   9 +
- gdb/bpf-tdep.c                  | 229 +++++++++++++++
+ gas/testsuite/gas/bpf/stores.d  |  21 ++
+ gas/testsuite/gas/bpf/stores.s  |  13 +
+ gdb/bpf-tdep.c                  | 229 ++++++++++++++
  gdb/bpf-tdep.h                  |  40 +++
  gdb/configure.tgt               |   4 +
  include/dis-asm.h               |   1 +
@@ -60,12 +59,12 @@ Signed-off-by: David S. Miller <davem@davemloft.net>
  ld/emulparams/elf64_bpf.sh      |   8 +
  opcodes/Makefile.am             |   2 +
  opcodes/bpf-dis.c               | 161 ++++++++++
- opcodes/bpf-opc.c               | 148 ++++++++++
+ opcodes/bpf-opc.c               | 147 +++++++++
  opcodes/configure               |   1 +
  opcodes/configure.ac            |   1 +
  opcodes/disassemble.c           |   6 +
  sim/configure.tgt               |   3 +
- 54 files changed, 2040 insertions(+), 2 deletions(-)
+ 54 files changed, 2067 insertions(+), 2 deletions(-)
  create mode 100644 bfd/cpu-bpf.c
  create mode 100644 bfd/elf64-bpf.c
  create mode 100644 bfd/elf64-bpf.h
@@ -290,10 +289,10 @@ index 0000000..551e42e
 +  };
 diff --git a/bfd/elf64-bpf.c b/bfd/elf64-bpf.c
 new file mode 100644
-index 0000000..1be285d
+index 0000000..a42f768
 --- /dev/null
 +++ b/bfd/elf64-bpf.c
-@@ -0,0 +1,156 @@
+@@ -0,0 +1,159 @@
 +#include "sysdep.h"
 +#include "bfd.h"
 +#include "bfdlink.h"
@@ -313,11 +312,14 @@ index 0000000..1be285d
 +  HOWTO(R_BPF_NONE,      0,3, 0,FALSE,0,complain_overflow_dont,    bfd_elf_generic_reloc,  "R_BPF_NONE",    FALSE,0,0x00000000,TRUE),
 +
 +  /* XXX these are wrong XXX */
-+  HOWTO(R_BPF_INSN_16,   0,1,16,FALSE,0,complain_overflow_bitfield,bfd_elf_generic_reloc,  "R_BPF_INSN_16", FALSE,0,0x0000ffff,TRUE),
-+  HOWTO(R_BPF_INSN_32,   0,2,32,FALSE,0,complain_overflow_bitfield,bfd_elf_generic_reloc,  "R_BPF_INSN_32", FALSE,0,0xffffffff,TRUE),
 +  HOWTO(R_BPF_INSN_64,   0,4,64,FALSE,0,complain_overflow_bitfield,bfd_elf_generic_reloc,  "R_BPF_INSN_64", FALSE,0,MINUS_ONE,TRUE),
++  HOWTO(R_BPF_INSN_32,   0,2,32,FALSE,0,complain_overflow_bitfield,bfd_elf_generic_reloc,  "R_BPF_INSN_32", FALSE,0,0xffffffff,TRUE),
++  HOWTO(R_BPF_INSN_16,   0,1,16,FALSE,0,complain_overflow_bitfield,bfd_elf_generic_reloc,  "R_BPF_INSN_16", FALSE,0,0x0000ffff,TRUE),
 +  HOWTO(R_BPF_WDISP16,   0,1,16,TRUE, 0,complain_overflow_signed,  bfd_elf_generic_reloc,  "R_BPF_WDISP16", FALSE,0,0x0000ffff,TRUE),
 +
++  EMPTY_HOWTO(5),
++  EMPTY_HOWTO(6),
++  EMPTY_HOWTO(7),
 +  HOWTO(R_BPF_DATA_8,    0,0, 8,FALSE,0,complain_overflow_bitfield,bfd_elf_generic_reloc,  "R_BPF_DATA_8",  FALSE,0,0x000000ff,TRUE),
 +  HOWTO(R_BPF_DATA_16,   0,1,16,FALSE,0,complain_overflow_bitfield,bfd_elf_generic_reloc,  "R_BPF_DATA_16", FALSE,0,0x0000ffff,TRUE),
 +  HOWTO(R_BPF_DATA_32,   0,2,32,FALSE,0,complain_overflow_bitfield,bfd_elf_generic_reloc,  "R_BPF_DATA_32", FALSE,0,0xffffffff,TRUE),
@@ -541,28 +543,55 @@ index 5841e8d..c38c4fb 100644
  	&bout_le_vec,
  
 diff --git a/binutils/readelf.c b/binutils/readelf.c
-index b57e1e0..6c67d98 100644
+index b57e1e0..b4013fb 100644
 --- a/binutils/readelf.c
 +++ b/binutils/readelf.c
-@@ -12006,6 +12006,8 @@ is_32bit_abs_reloc (unsigned int reloc_type)
+@@ -95,6 +95,7 @@
+ #include "elf/arm.h"
+ #include "elf/avr.h"
+ #include "elf/bfin.h"
++#include "elf/bpf.h"
+ #include "elf/cr16.h"
+ #include "elf/cris.h"
+ #include "elf/crx.h"
+@@ -746,6 +747,7 @@ guess_is_rela (unsigned int e_machine)
+     case EM_AVR:
+     case EM_AVR_OLD:
+     case EM_BLACKFIN:
++    case EM_BPF:
+     case EM_CR16:
+     case EM_CRIS:
+     case EM_CRX:
+@@ -1458,6 +1460,10 @@ dump_relocations (FILE * file,
+ 	  rtype = elf_bfin_reloc_type (type);
+ 	  break;
+ 
++	case EM_BPF:
++	  rtype = elf_bpf_reloc_type (type);
++	  break;
++
+ 	case EM_CYGNUS_MEP:
+ 	  rtype = elf_mep_reloc_type (type);
+ 	  break;
+@@ -12006,6 +12012,8 @@ is_32bit_abs_reloc (unsigned int reloc_type)
        return reloc_type == 1;
      case EM_BLACKFIN:
        return reloc_type == 0x12; /* R_byte4_data.  */
 +    case EM_BPF:
-+      return reloc_type == 7; /* R_BPF_DATA_32 */
++      return reloc_type == 10; /* R_BPF_DATA_32 */
      case EM_CRIS:
        return reloc_type == 3; /* R_CRIS_32.  */
      case EM_CR16:
-@@ -12245,6 +12247,8 @@ is_64bit_abs_reloc (unsigned int reloc_type)
+@@ -12245,6 +12253,8 @@ is_64bit_abs_reloc (unsigned int reloc_type)
        return reloc_type == 257;	/* R_AARCH64_ABS64.  */
      case EM_ALPHA:
        return reloc_type == 2; /* R_ALPHA_REFQUAD.  */
 +    case EM_BPF:
-+      return reloc_type == 8; /* R_BPF_DATA_64 */
++      return reloc_type == 11; /* R_BPF_DATA_64 */
      case EM_IA_64:
        return reloc_type == 0x27; /* R_IA64_DIR64LSB.  */
      case EM_PARISC:
-@@ -12411,6 +12415,7 @@ is_none_reloc (unsigned int reloc_type)
+@@ -12411,6 +12421,7 @@ is_none_reloc (unsigned int reloc_type)
      case EM_ARC_COMPACT2: /* R_ARC_NONE.  */
      case EM_ARC_COMPACT: /* R_ARC_NONE.  */
      case EM_ARM:     /* R_ARM_NONE.  */
@@ -671,10 +700,10 @@ index 1927de5..ee62f1a 100644
  @am__fastdepCC_TRUE@	$(am__mv) $(DEPDIR)/tc-cr16.Tpo $(DEPDIR)/tc-cr16.Po
 diff --git a/gas/config/tc-bpf.c b/gas/config/tc-bpf.c
 new file mode 100644
-index 0000000..0ba2afa
+index 0000000..36393b7
 --- /dev/null
 +++ b/gas/config/tc-bpf.c
-@@ -0,0 +1,628 @@
+@@ -0,0 +1,639 @@
 +/* tc-bpf.c -- Assemble for the SPARC
 +   Copyright (C) 2017 Free Software Foundation, Inc.
 +   This file is part of GAS, the GNU Assembler.
@@ -965,6 +994,14 @@ index 0000000..0ba2afa
 +	  switch (*args)
 +	    {
 +	    case '+':
++	      if (*s == '+')
++		{
++		  ++s;
++		  continue;
++		}
++	      if (*s == '-')
++		continue;
++	      break;
 +	    case ',':
 +	    case '[':
 +	    case ']':
@@ -1171,6 +1208,9 @@ index 0000000..0ba2afa
 +  offsetT val = * (offsetT *) valP;
 +
 +  gas_assert (fixP->fx_r_type < BFD_RELOC_UNUSED);
++
++  fixP->fx_addnumber = val;	/* Remember value for emit_reloc.  */
++
 +  /* If this is a data relocation, just output VAL.  */
 +
 +  if (fixP->fx_r_type == BFD_RELOC_8)
@@ -1565,10 +1605,10 @@ index 0000000..363fd2c
 +}
 diff --git a/gas/testsuite/gas/bpf/call.d b/gas/testsuite/gas/bpf/call.d
 new file mode 100644
-index 0000000..e142050
+index 0000000..8521f25
 --- /dev/null
 +++ b/gas/testsuite/gas/bpf/call.d
-@@ -0,0 +1,18 @@
+@@ -0,0 +1,14 @@
 +#as: -EL
 +#objdump: -dr
 +#name: call
@@ -1582,26 +1622,18 @@ index 0000000..e142050
 +   8:	85 00 00 00 02 00 00 00 	call	0x2
 +  10:	85 00 00 00 03 00 00 00 	call	0x3
 +  18:	85 00 00 00 04 00 00 00 	call	0x4
-+  20:	8d 00 00 00 05 00 00 00 	tailcall	0x5
-+  28:	8d 00 00 00 06 00 00 00 	tailcall	0x6
-+  30:	8d 00 00 00 07 00 00 00 	tailcall	0x7
-+  38:	8d 00 00 00 09 00 00 00 	tailcall	0x9
-+  40:	95 00 00 00 00 00 00 00 	exit	
++  20:	95 00 00 00 00 00 00 00 	exit	
 diff --git a/gas/testsuite/gas/bpf/call.s b/gas/testsuite/gas/bpf/call.s
 new file mode 100644
-index 0000000..6fdc4f2
+index 0000000..e31980d
 --- /dev/null
 +++ b/gas/testsuite/gas/bpf/call.s
-@@ -0,0 +1,10 @@
+@@ -0,0 +1,6 @@
 +	.text
 +	call	1
 +	call	2
 +	call	3
 +	call	4
-+	tailcall 5
-+	tailcall 6
-+	tailcall 7
-+	tailcall 9
 +	exit
 diff --git a/gas/testsuite/gas/bpf/imm64.d b/gas/testsuite/gas/bpf/imm64.d
 new file mode 100644
@@ -1749,10 +1781,10 @@ index 0000000..4e084b4
 +1:	exit
 diff --git a/gas/testsuite/gas/bpf/loads.d b/gas/testsuite/gas/bpf/loads.d
 new file mode 100644
-index 0000000..d981ef6
+index 0000000..542e895
 --- /dev/null
 +++ b/gas/testsuite/gas/bpf/loads.d
-@@ -0,0 +1,23 @@
+@@ -0,0 +1,27 @@
 +#as: -EL
 +#objdump: -dr
 +#name: loads
@@ -1776,12 +1808,16 @@ index 0000000..d981ef6
 +  58:	71 43 02 00 00 00 00 00 	ldb	r4, \[r3\+2\]
 +  60:	71 53 03 00 00 00 00 00 	ldb	r5, \[r3\+3\]
 +  68:	71 63 00 00 00 00 00 00 	ldb	r6, \[r3\+0\]
++  70:	71 1a f8 ff 00 00 00 00 	ldb	r1, \[r10\+-8\]
++  78:	69 2a f6 ff 00 00 00 00 	ldh	r2, \[r10\+-10\]
++  80:	61 3a f4 ff 00 00 00 00 	ldw	r3, \[r10\+-12\]
++  88:	79 4a f0 ff 00 00 00 00 	lddw	r4, \[r10\+-16\]
 diff --git a/gas/testsuite/gas/bpf/loads.s b/gas/testsuite/gas/bpf/loads.s
 new file mode 100644
-index 0000000..8602897
+index 0000000..1aa8f88
 --- /dev/null
 +++ b/gas/testsuite/gas/bpf/loads.s
-@@ -0,0 +1,15 @@
+@@ -0,0 +1,19 @@
 +	.text
 +	ldb	r1, [r2+3]
 +	ldh	r1, [r2+2]
@@ -1797,6 +1833,10 @@ index 0000000..8602897
 +	ldb	r4, [r3+2]
 +	ldb	r5, [r3+3]
 +	ldb	r6, [r3+0]
++	ldb	r1, [r10-8]
++	ldh	r2, [r10-10]
++	ldw	r3, [r10-12]
++	lddw	r4, [r10-16]
 diff --git a/gas/testsuite/gas/bpf/move.d b/gas/testsuite/gas/bpf/move.d
 new file mode 100644
 index 0000000..f15ad23
@@ -1841,10 +1881,10 @@ index 0000000..36797b3
 +	mov	r5, 2
 diff --git a/gas/testsuite/gas/bpf/stores.d b/gas/testsuite/gas/bpf/stores.d
 new file mode 100644
-index 0000000..0f416e0
+index 0000000..6033d43
 --- /dev/null
 +++ b/gas/testsuite/gas/bpf/stores.d
-@@ -0,0 +1,17 @@
+@@ -0,0 +1,21 @@
 +#as: -EL
 +#objdump: -dr
 +#name: stores
@@ -1862,12 +1902,16 @@ index 0000000..0f416e0
 +  28:	72 10 02 00 02 00 00 00 	stb	\[r1\+2\], 2
 +  30:	7b 15 08 00 00 00 00 00 	stdw	\[r1\+8\], r5
 +  38:	7a 10 10 00 10 00 00 00 	stdw	\[r1\+16\], 16
++  40:	73 a1 f8 ff 00 00 00 00 	stb	\[r10\+-8\], r1
++  48:	6b a2 f6 ff 00 00 00 00 	sth	\[r10\+-10\], r2
++  50:	63 a3 f4 ff 00 00 00 00 	stw	\[r10\+-12\], r3
++  58:	7b a4 f0 ff 00 00 00 00 	stdw	\[r10\+-16\], r4
 diff --git a/gas/testsuite/gas/bpf/stores.s b/gas/testsuite/gas/bpf/stores.s
 new file mode 100644
-index 0000000..d164f2a
+index 0000000..eb7c6e6
 --- /dev/null
 +++ b/gas/testsuite/gas/bpf/stores.s
-@@ -0,0 +1,9 @@
+@@ -0,0 +1,13 @@
 +	.text
 +	stw	[r1+0], r2
 +	stw	[r1+4], 0
@@ -1877,6 +1921,10 @@ index 0000000..d164f2a
 +	stb	[r1+2], 2
 +	stdw	[r1+8], r5
 +	stdw	[r1+16], 16
++	stb	[r10-8], r1
++	sth	[r10-10], r2
++	stw	[r10-12], r3
++	stdw	[r10-16], r4
 diff --git a/gdb/bpf-tdep.c b/gdb/bpf-tdep.c
 new file mode 100644
 index 0000000..6629f73
@@ -2187,7 +2235,7 @@ index 6f1801d..cbfebc8 100644
  extern int print_insn_big_nios2		(bfd_vma, disassemble_info *);
 diff --git a/include/elf/bpf.h b/include/elf/bpf.h
 new file mode 100644
-index 0000000..5019b11
+index 0000000..4aa38cc
 --- /dev/null
 +++ b/include/elf/bpf.h
 @@ -0,0 +1,39 @@
@@ -2219,14 +2267,14 @@ index 0000000..5019b11
 +/* Relocation types.  */
 +START_RELOC_NUMBERS (elf_bpf_reloc_type)
 +  RELOC_NUMBER (R_BPF_NONE, 0)
-+  RELOC_NUMBER (R_BPF_INSN_16, 1)
++  RELOC_NUMBER (R_BPF_INSN_64, 1)
 +  RELOC_NUMBER (R_BPF_INSN_32, 2)
-+  RELOC_NUMBER (R_BPF_INSN_64, 3)
++  RELOC_NUMBER (R_BPF_INSN_16, 3)
 +  RELOC_NUMBER (R_BPF_WDISP16, 4)
-+  RELOC_NUMBER (R_BPF_DATA_8,  5)
-+  RELOC_NUMBER (R_BPF_DATA_16, 6)
-+  RELOC_NUMBER (R_BPF_DATA_32, 7)
-+  RELOC_NUMBER (R_BPF_DATA_64, 8)
++  RELOC_NUMBER (R_BPF_DATA_8,  8)
++  RELOC_NUMBER (R_BPF_DATA_16, 9)
++  RELOC_NUMBER (R_BPF_DATA_32, 10)
++  RELOC_NUMBER (R_BPF_DATA_64, 11)
 +END_RELOC_NUMBERS (R_BPF_max)
 +
 +#endif /* _ELF_BPF_H */
@@ -2346,7 +2394,7 @@ index 1ac6bb1..ccc9453 100644
  	cgen-dis.c \
 diff --git a/opcodes/bpf-dis.c b/opcodes/bpf-dis.c
 new file mode 100644
-index 0000000..92e29af
+index 0000000..39656bf
 --- /dev/null
 +++ b/opcodes/bpf-dis.c
 @@ -0,0 +1,161 @@
@@ -2401,7 +2449,7 @@ index 0000000..92e29af
 +  bpf_opcode_hash *op;
 +  int code, dest, src;
 +  bfd_byte buffer[8];
-+  unsigned short off;
++  signed short off;
 +  int status, ret;
 +  signed int imm;
 +
@@ -2430,7 +2478,7 @@ index 0000000..92e29af
 +  else
 +    {
 +      getword = bfd_getl32;
-+      gethalf = bfd_getl32;
++      gethalf = bfd_getl16;
 +    }  
 +
 +  code = buffer[0];
@@ -2480,7 +2528,7 @@ index 0000000..92e29af
 +	      (*info->fprintf_func) (stream, "%d", imm);
 +	      break;
 +	    case 'O':
-+	      (*info->fprintf_func) (stream, "%d", off);
++	      (*info->fprintf_func) (stream, "%d", (int) off);
 +	      break;
 +	    case 'L':
 +	      info->target = memaddr + ((off - 1) * 8);
@@ -2513,10 +2561,10 @@ index 0000000..92e29af
 +}
 diff --git a/opcodes/bpf-opc.c b/opcodes/bpf-opc.c
 new file mode 100644
-index 0000000..ce4129b
+index 0000000..8afb637
 --- /dev/null
 +++ b/opcodes/bpf-opc.c
-@@ -0,0 +1,148 @@
+@@ -0,0 +1,147 @@
 +#include "sysdep.h"
 +#include <stdio.h>
 +#include "opcode/bpf.h"
@@ -2646,7 +2694,6 @@ index 0000000..ce4129b
 +  { "jset",    BPF_OPC_JMP   | BPF_OPC_JSET | BPF_OPC_X,     "1,2,L" },
 +  { "jset",    BPF_OPC_JMP   | BPF_OPC_JSET | BPF_OPC_K,     "1,i,L" },
 +  { "call",    BPF_OPC_JMP   | BPF_OPC_CALL,                 "C" },
-+  { "tailcall",BPF_OPC_JMP   | BPF_OPC_CALL | BPF_OPC_X,     "C" },
 +  { "exit",    BPF_OPC_JMP   | BPF_OPC_EXIT,                 "" },
 +  { "ldimm64", BPF_OPC_LD    | BPF_OPC_IMM  | BPF_OPC_DW,    "1,D" },
 +  { "ldw",     BPF_OPC_LDX   | BPF_OPC_MEM  | BPF_OPC_W,     "1,[2+O]" },
@@ -2728,5 +2775,5 @@ index c958fb3..09eec72 100644
         SIM_ARCH(cr16)
         ;;
 -- 
-2.4.11
+2.7.4
 

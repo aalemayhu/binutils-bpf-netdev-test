@@ -3,7 +3,7 @@ FROM fedora
 ENV PATCH_DIR "/src/netdev"
 ENV BINUTILS_DIR $PATCH_DIR/binutils
 ENV BINUTILS_REPO "git://sourceware.org/git/binutils-gdb.git"
-ENV PATCH_FILE "2.patch"
+ENV PATCH_FILE "4.patch"
 
 WORKDIR $BINUTILS_DIR
 RUN dnf install -y git gcc texinfo bison flex gcc-c++ && \
